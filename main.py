@@ -315,64 +315,49 @@ def analyze_with_groq(item: dict) -> str:
 
 
 # ─── Email Notification ───────────────────────────────────
-def build_email_html(item: dict, ai_brief: str) -> str:
-    """Build a formatted HTML email body."""
+def build_digest_email_html(items_with_briefs: list) -> str:
+    """Build a formatted HTML digest email body."""
     now = datetime.now(timezone.utc).strftime("%B %d, %Y at %H:%M UTC")
-    ai_html = ai_brief.replace("\n", "<br>")
-
-    is_contest = item["type"] == "CONTEST"
-    # Different color scheme for contests vs projects
-    gradient = "linear-gradient(135deg,#f59e0b,#ef4444)" if is_contest else "linear-gradient(135deg,#6366f1,#8b5cf6)"
-    accent = "#f59e0b" if is_contest else "#a78bfa"
-    badge_bg = "#451a03" if is_contest else "#1e1b4b"
-    badge_text = "#fbbf24" if is_contest else "#c4b5fd"
-    icon = "CONTEST" if is_contest else "PROJECT"
-    cta_text = "ENTER CONTEST" if is_contest else "BID ON PROJECT"
-
-    return f"""\
-    <html>
-    <body style="margin:0; padding:0; background:#0f0f13; font-family:'Segoe UI',Arial,sans-serif;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f13; padding:30px 0;">
-        <tr><td align="center">
-          <table width="600" cellpadding="0" cellspacing="0" style="background:#1a1a2e; border-radius:12px; overflow:hidden; border:1px solid #2a2a4a;">
-
-            <!-- Header -->
+    
+    blocks = []
+    for item_data in items_with_briefs:
+        item = item_data["item"]
+        ai_brief = item_data["ai_brief"]
+        
+        ai_html = ai_brief.replace("\n", "<br>")
+        is_contest = item["type"] == "CONTEST"
+        gradient = "linear-gradient(135deg,#f59e0b,#ef4444)" if is_contest else "linear-gradient(135deg,#6366f1,#8b5cf6)"
+        accent = "#f59e0b" if is_contest else "#a78bfa"
+        badge_bg = "#451a03" if is_contest else "#1e1b4b"
+        badge_text = "#fbbf24" if is_contest else "#c4b5fd"
+        icon = "CONTEST" if is_contest else "PROJECT"
+        cta_text = "ENTER CONTEST" if is_contest else "BID ON PROJECT"
+        
+        block = f"""
+            <!-- Project/Contest Block -->
             <tr>
-              <td style="background:{gradient}; padding:28px 32px;">
-                <table width="100%"><tr>
+              <td style="padding:28px 32px 16px; background:#1a1a2e; border-top:1px solid #2a2a4a; margin-top:20px; display:block;">
+                <table width="100%" cellpadding="0" cellspacing="0"><tr>
                   <td>
-                    <h1 style="margin:0; color:#fff; font-size:20px; font-weight:700;">
-                      {"&#127942;" if is_contest else "&#128640;"} NEW {icon} ALERT
-                    </h1>
-                    <p style="margin:6px 0 0; color:rgba(255,255,255,0.8); font-size:13px;">
-                      {now}
-                    </p>
+                    <h2 style="margin:0; color:#e2e8f0; font-size:18px; line-height:1.4;">
+                      {item['title']}
+                    </h2>
                   </td>
-                  <td align="right">
-                    <span style="background:{badge_bg}; color:{badge_text}; padding:6px 14px; border-radius:20px; font-size:12px; font-weight:700; letter-spacing:1px;">
+                  <td align="right" valign="top">
+                    <span style="background:{badge_bg}; color:{badge_text}; padding:6px 14px; border-radius:20px; font-size:12px; font-weight:700; letter-spacing:1px; white-space:nowrap;">
                       {icon}
                     </span>
                   </td>
                 </tr></table>
-              </td>
-            </tr>
-
-            <!-- Title -->
-            <tr>
-              <td style="padding:28px 32px 16px;">
-                <h2 style="margin:0; color:#e2e8f0; font-size:18px; line-height:1.4;">
-                  {item['title']}
-                </h2>
                 <p style="margin:8px 0 0; color:#94a3b8; font-size:13px;">
                   <strong style="color:{accent};">Skills:</strong> {item.get('skills') or 'Not specified'}
                 </p>
                 {f'<p style="margin:4px 0 0; color:#94a3b8; font-size:13px;"><strong style="color:{accent};">Budget:</strong> {item["budget"]}</p>' if item.get('budget') else ''}
               </td>
             </tr>
-
-            <!-- Description Preview -->
+            
             {f'''<tr>
-              <td style="padding:0 32px 16px;">
+              <td style="padding:0 32px 16px; background:#1a1a2e; display:block;">
                 <div style="background:#12121c; border:1px solid #2a2a4a; border-radius:8px; padding:16px;">
                   <h3 style="margin:0 0 8px; color:#64748b; font-size:12px; text-transform:uppercase; letter-spacing:1px;">
                     Description
@@ -386,7 +371,7 @@ def build_email_html(item: dict, ai_brief: str) -> str:
 
             <!-- AI Analysis -->
             <tr>
-              <td style="padding:0 32px 20px;">
+              <td style="padding:0 32px 20px; background:#1a1a2e; display:block;">
                 <div style="background:#12121c; border:1px solid #2a2a4a; border-radius:8px; padding:20px;">
                   <h3 style="margin:0 0 12px; color:{accent}; font-size:14px; text-transform:uppercase; letter-spacing:1px;">
                     &#129302; AI Strategic Brief
@@ -400,18 +385,49 @@ def build_email_html(item: dict, ai_brief: str) -> str:
 
             <!-- CTA Button -->
             <tr>
-              <td style="padding:0 32px 28px;" align="center">
+              <td style="padding:0 32px 28px; background:#1a1a2e; display:block;" align="center">
                 <a href="{item['link']}" style="display:inline-block; background:{gradient}; color:#fff; text-decoration:none; padding:14px 36px; border-radius:8px; font-size:15px; font-weight:600; letter-spacing:0.5px;">
                   {cta_text} &#8594;
                 </a>
               </td>
             </tr>
+        """
+        blocks.append(block)
+
+    all_blocks_html = "\n".join(blocks)
+    
+    count = len(items_with_briefs)
+    title_text = f"&#128276; {count} NEW FREELANCER OPPORTUNITIES" if count > 1 else "&#128276; NEW FREELANCER OPPORTUNITY"
+
+    return f"""\
+    <html>
+    <body style="margin:0; padding:0; background:#0f0f13; font-family:'Segoe UI',Arial,sans-serif;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f13; padding:30px 0;">
+        <tr><td align="center">
+          <table width="600" cellpadding="0" cellspacing="0" style="background:#12121c; border-radius:12px; overflow:hidden; border:1px solid #2a2a4a;">
+            <!-- Header -->
+            <tr>
+              <td style="background:linear-gradient(135deg,#3b82f6,#8b5cf6); padding:28px 32px; display:block;">
+                <table width="100%" cellpadding="0" cellspacing="0"><tr>
+                  <td>
+                    <h1 style="margin:0; color:#fff; font-size:20px; font-weight:700;">
+                      {title_text}
+                    </h1>
+                    <p style="margin:6px 0 0; color:rgba(255,255,255,0.8); font-size:13px;">
+                      {now}
+                    </p>
+                  </td>
+                </tr></table>
+              </td>
+            </tr>
+            
+            {all_blocks_html}
 
             <!-- Footer -->
             <tr>
-              <td style="padding:18px 32px; background:#12121c; border-top:1px solid #2a2a4a;">
+              <td style="padding:18px 32px; background:#0f0f13; border-top:1px solid #2a2a4a; display:block;">
                 <p style="margin:0; color:#64748b; font-size:12px; text-align:center;">
-                  Freelancer Monitor v2.0 &#8226; Projects + Contests &#8226; Powered by Groq AI
+                  Freelancer Monitor v2.0 &#8226; Batched Delivery &#8226; Powered by Groq AI
                 </p>
               </td>
             </tr>
@@ -423,30 +439,29 @@ def build_email_html(item: dict, ai_brief: str) -> str:
     </html>
     """
 
-
-def send_email(item: dict, ai_brief: str):
-    """Send alert email via Gmail SMTP."""
+def send_digest_email(items_with_briefs: list):
+    """Send alert email via Gmail SMTP containing multiple aggregated items."""
     if not all([SENDER_EMAIL, GMAIL_APP_PASSWORD, RECEIVER_EMAIL]):
         log.error("  Email credentials not fully configured. Skipping.")
         return False
-
-    is_contest = item["type"] == "CONTEST"
-    label = "CONTEST ALERT" if is_contest else "PROJECT ALERT"
+        
+    count = len(items_with_briefs)
+    subject = f"[FREELANCER] {count} New Opportunities Matched!" if count > 1 else f"[{items_with_briefs[0]['item']['type']}] {items_with_briefs[0]['item']['title']}"
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[{label}] {item['title']}"
+    msg["Subject"] = subject
     msg["From"]    = f"Freelancer Monitor <{SENDER_EMAIL}>"
     msg["To"]      = RECEIVER_EMAIL
 
-    html_body = build_email_html(item, ai_brief)
+    html_body = build_digest_email_html(items_with_briefs)
     msg.attach(MIMEText(html_body, "html"))
 
     try:
-        log.info(f"  Sending email to {RECEIVER_EMAIL}...")
+        log.info(f"  Sending batched email to {RECEIVER_EMAIL} ({count} items)...")
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
             server.login(SENDER_EMAIL, GMAIL_APP_PASSWORD)
             server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        log.info("  Email sent successfully!")
+        log.info("  Batched email sent successfully!")
         return True
     except smtplib.SMTPAuthenticationError:
         log.error("  SMTP auth failed. Check SENDER_EMAIL & GMAIL_APP_PASSWORD.")
@@ -456,14 +471,25 @@ def send_email(item: dict, ai_brief: str):
         return False
 
 
-# ─── Process a Single Listing ─────────────────────────────
-def process_item(item: dict):
-    """Analyze and notify about a single project or contest."""
-    log.info(f"  [{item['type']}] {item['title']}")
-    log.info(f"  Link: {item['link']}")
-
-    ai_brief = analyze_with_groq(item)
-    send_email(item, ai_brief)
+# ─── Process a Batch ─────────────────────────────
+def process_batch(items: list, seen: dict):
+    """Analyze and notify about a batch of projects or contests."""
+    items_with_briefs = []
+    
+    for item in items:
+        log.info(f"  Processing [{item['type']}] {item['title']}...")
+        ai_brief = analyze_with_groq(item)
+        items_with_briefs.append({"item": item, "ai_brief": ai_brief})
+        # After successful analysis (even if fallback error message), mark as seen
+        if item["type"] == "PROJECT":
+            seen["projects"].add(item["id"])
+        else:
+            seen["contests"].add(item["id"])
+    
+    if items_with_briefs:
+        send_digest_email(items_with_briefs)
+    
+    save_seen_ids(seen)
 
 
 # ─── Main Loop ─────────────────────────────────────────────
@@ -499,16 +525,14 @@ def run_monitor():
         elapsed = int(time.time() - start_time)
         log.info(f"\n--- Check #{check_count} (elapsed: {elapsed}s / {LOOP_DURATION_SEC}s) ---")
 
+        new_items_this_cycle = []
+
         # ── Check Projects (RSS) ──
         try:
             projects = fetch_projects()
             for item in projects:
                 if item["id"] not in seen["projects"]:
-                    new_projects += 1
-                    log.info(f"  [NEW PROJECT] {item['title']}")
-                    process_item(item)
-                    seen["projects"].add(item["id"])
-                    save_seen_ids(seen)
+                    new_items_this_cycle.append(item)
         except Exception as e:
             log.error(f"  Project check error: {e}", exc_info=True)
 
@@ -517,16 +541,25 @@ def run_monitor():
             contests = fetch_contests()
             for item in contests:
                 if item["id"] not in seen["contests"]:
-                    new_contests += 1
-                    log.info(f"  [NEW CONTEST] {item['title']}")
-                    process_item(item)
-                    seen["contests"].add(item["id"])
-                    save_seen_ids(seen)
+                    new_items_this_cycle.append(item)
         except Exception as e:
             log.error(f"  Contest check error: {e}", exc_info=True)
 
+        if new_items_this_cycle:
+            # Enforce the backlog slicing feature (max 12 per cycle)
+            batch = new_items_this_cycle[:12]
+            log.info(f"  Found {len(new_items_this_cycle)} new items. Processing batch of {len(batch)} items...")
+            
+            process_batch(batch, seen)
+            
+            log.info(f"  Batch processed. {len(new_items_this_cycle) - len(batch)} items remaining in backlog for next tick.")
+            new_projects += len([i for i in batch if i["type"] == "PROJECT"])
+            new_contests += len([i for i in batch if i["type"] == "CONTEST"])
+        else:
+            log.info("  No new items found. Backlog is clear.")
+
         # Summary for this check
-        log.info(f"  Check #{check_count} done. Total new: {new_projects} projects, {new_contests} contests.")
+        log.info(f"  Check #{check_count} done. Processed this session: {new_projects} projects, {new_contests} contests.")
 
         # Sleep until next check
         remaining = LOOP_DURATION_SEC - (time.time() - start_time)
