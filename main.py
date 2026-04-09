@@ -3,7 +3,7 @@ Freelancer Monitor v2.0 — Projects + Contests
 -----------------------------------------------
 Monitors BOTH Freelancer.com RSS feed (projects) AND
 contest browse page (contests) for new listings.
-Uses DeepSeek AI to analyze each listing and sends
+Uses Groq AI to analyze each listing and sends
 instant email alerts.
 
 Key insight: Freelancer's RSS feed ONLY contains /projects/.
@@ -35,7 +35,7 @@ logging.basicConfig(
 log = logging.getLogger("freelancer-monitor")
 
 # ─── Configuration ─────────────────────────────────────────
-DEEPSEEK_API_KEY   = os.getenv("DEEPSEEK_API_KEY", "")
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
 RSS_URL            = os.getenv("FREELANCER_RSS_URL",
                        "https://www.freelancer.com/rss.xml"
                        "?query=Typescript%20Tailwind%20CSS%20Node.js%20VPS%20PHP"
@@ -48,7 +48,7 @@ RECEIVER_EMAIL     = os.getenv("RECEIVER_EMAIL", "")
 STATE_FILE         = "seen_ids.json"
 LOOP_DURATION_SEC  = 5 * 60        # Run for 5 minutes per GitHub Actions invocation
 CHECK_INTERVAL_SEC = 30            # Check every 30 seconds (aggressive)
-DEEPSEEK_API_URL   = "https://api.deepseek.com/chat/completions"
+GROQ_API_URL       = "https://api.groq.com/openai/v1/chat/completions"
 
 # Request headers to avoid being blocked
 HEADERS = {
@@ -241,11 +241,11 @@ def fetch_contests() -> list:
         return []
 
 
-# ─── DeepSeek AI Analysis ─────────────────────────────────
-def analyze_with_deepseek(item: dict) -> str:
-    """Send listing details to DeepSeek for strategic analysis."""
-    if not DEEPSEEK_API_KEY:
-        log.warning("  DEEPSEEK_API_KEY not set -- skipping AI analysis.")
+# ─── Groq AI Analysis ─────────────────────────────────
+def analyze_with_groq(item: dict) -> str:
+    """Send listing details to Groq for strategic analysis."""
+    if not GROQ_API_KEY:
+        log.warning("  GROQ_API_KEY not set -- skipping AI analysis.")
         return "<em>AI analysis unavailable (API key not configured).</em>"
 
     listing_type = item["type"]
@@ -265,29 +265,29 @@ def analyze_with_deepseek(item: dict) -> str:
         prompt += f"\n**Skills Required:** {item['skills']}"
 
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "deepseek-chat",
+        "model": "llama-3.3-70b-versatile",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5,
         "max_tokens": 500,
     }
 
     try:
-        log.info("  Requesting DeepSeek analysis...")
-        resp = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=30)
+        log.info("  Requesting Groq analysis...")
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         analysis = data["choices"][0]["message"]["content"]
         log.info("  AI analysis received.")
         return analysis
     except requests.exceptions.Timeout:
-        log.error("  DeepSeek API timed out.")
+        log.error("  Groq API timed out.")
         return "<em>AI analysis timed out.</em>"
     except requests.exceptions.RequestException as e:
-        log.error(f"  DeepSeek API error: {e}")
+        log.error(f"  Groq API error: {e}")
         return f"<em>AI analysis failed: {e}</em>"
     except (KeyError, IndexError) as e:
         log.error(f"  Unexpected API response: {e}")
@@ -391,7 +391,7 @@ def build_email_html(item: dict, ai_brief: str) -> str:
             <tr>
               <td style="padding:18px 32px; background:#12121c; border-top:1px solid #2a2a4a;">
                 <p style="margin:0; color:#64748b; font-size:12px; text-align:center;">
-                  Freelancer Monitor v2.0 &#8226; Projects + Contests &#8226; Powered by DeepSeek AI
+                  Freelancer Monitor v2.0 &#8226; Projects + Contests &#8226; Powered by Groq AI
                 </p>
               </td>
             </tr>
@@ -442,7 +442,7 @@ def process_item(item: dict):
     log.info(f"  [{item['type']}] {item['title']}")
     log.info(f"  Link: {item['link']}")
 
-    ai_brief = analyze_with_deepseek(item)
+    ai_brief = analyze_with_groq(item)
     send_email(item, ai_brief)
 
 
@@ -455,7 +455,7 @@ def run_monitor():
 
     # Validate config
     missing = []
-    if not DEEPSEEK_API_KEY:   missing.append("DEEPSEEK_API_KEY")
+    if not GROQ_API_KEY:       missing.append("GROQ_API_KEY")
     if not SENDER_EMAIL:       missing.append("SENDER_EMAIL")
     if not GMAIL_APP_PASSWORD: missing.append("GMAIL_APP_PASSWORD")
     if not RECEIVER_EMAIL:     missing.append("RECEIVER_EMAIL")
