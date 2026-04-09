@@ -53,6 +53,9 @@ rss_qs = urllib.parse.parse_qs(parsed_rss.query)
 raw_query = rss_qs.get("query", [""])[0]
 SKILLS_FILTER = [s.strip().lower() for s in raw_query.split() if s.strip()]
 
+FALLBACK_RSS_URL = "https://www.freelancer.com/rss.xml?query=Graphic%20Design%20Photoshop%20Illustrator%20Logo"
+FALLBACK_SKILLS = ["illustrator", "photoshop", "design", "graphic", "logo"]
+
 CONTEST_BROWSE_URL = "https://www.freelancer.com/contest/browse/"
 SENDER_EMAIL       = os.getenv("SENDER_EMAIL", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -104,11 +107,10 @@ def generate_id(text: str) -> str:
 
 
 # ─── RSS Feed (Projects) ──────────────────────────────────
-def fetch_projects() -> list:
-    """Fetch projects from the Freelancer RSS feed."""
-    log.info("[PROJECTS] Fetching RSS feed...")
+def fetch_projects(feed_url: str = RSS_URL) -> list:
+    """Fetch projects from a Freelancer RSS feed."""
     try:
-        feed = feedparser.parse(RSS_URL)
+        feed = feedparser.parse(feed_url)
         if feed.bozo:
             log.warning(f"  RSS parse warning: {feed.bozo_exception}")
 
@@ -145,10 +147,9 @@ def fetch_projects() -> list:
                 "pub_date": entry.get("published", ""),
             })
 
-        log.info(f"  Found {len(projects)} project(s) in RSS feed.")
         return projects
     except Exception as e:
-        log.error(f"  RSS fetch error: {e}")
+        log.error(f"  RSS fetch error for {feed_url}: {e}")
         return []
 
 
@@ -262,6 +263,13 @@ def fetch_contests() -> list:
                     matched = True
                     break
                     
+            if not matched:
+                # Try explicit contest Graphic Design fallbacks
+                for skill in FALLBACK_SKILLS:
+                    if re.search(r'\b' + re.escape(skill) + r'\b', text_to_search):
+                        matched = True
+                        break
+                        
             if matched:
                 filtered_contests.append(c)
 
@@ -565,11 +573,22 @@ def run_monitor():
         new_items_this_cycle = []
 
         # ── Check Projects (RSS) ──
+        log.info("[PROJECTS] Fetching Primary RSS feed...")
         try:
-            projects = fetch_projects()
+            projects = fetch_projects(RSS_URL)
             for item in projects:
                 if item["id"] not in seen["projects"]:
                     new_items_this_cycle.append(item)
+                    
+            # Fallback if we found 0 new projects, or less than a healthy batch (e.g. < 4)
+            # The user requested explicitly: "send about 4 of those..."
+            new_primary_projects = len([i for i in new_items_this_cycle if i["type"] == "PROJECT"])
+            if new_primary_projects < 4:
+                log.info(f"  Only {new_primary_projects} primary projects found. Searching Graphic Design fallback...")
+                fallback_projects = fetch_projects(FALLBACK_RSS_URL)
+                for item in fallback_projects:
+                    if item["id"] not in seen["projects"]:
+                        new_items_this_cycle.append(item)
         except Exception as e:
             log.error(f"  Project check error: {e}", exc_info=True)
 
