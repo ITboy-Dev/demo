@@ -35,6 +35,8 @@ logging.basicConfig(
 log = logging.getLogger("freelancer-monitor")
 
 # ─── Configuration ─────────────────────────────────────────
+import urllib.parse
+
 raw_keys = os.getenv("GROQ_API_KEYS", os.getenv("GROQ_API_KEY", ""))
 API_KEYS = [k.strip() for k in re.split(r'[,\n\s]+', raw_keys) if k.strip()]
 CURRENT_KEY_INDEX = 0
@@ -44,6 +46,13 @@ RSS_URL            = os.getenv("FREELANCER_RSS_URL",
                        "https://www.freelancer.com/rss.xml"
                        "?query=Typescript%20Tailwind%20CSS%20Node.js%20VPS%20PHP"
                        "%20JavaScript%20Python%20WordPress%20HTML%20Web%20Development")
+
+# Parse RSS_URL to extract the search keywords so we can filter contests organically too
+parsed_rss = urllib.parse.urlparse(RSS_URL)
+rss_qs = urllib.parse.parse_qs(parsed_rss.query)
+raw_query = rss_qs.get("query", [""])[0]
+SKILLS_FILTER = [s.strip().lower() for s in raw_query.split() if s.strip()]
+
 CONTEST_BROWSE_URL = "https://www.freelancer.com/contest/browse/"
 SENDER_EMAIL       = os.getenv("SENDER_EMAIL", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -238,8 +247,26 @@ def fetch_contests() -> list:
         except Exception as api_err:
             log.debug(f"  API fallback failed (non-critical): {api_err}")
 
-        log.info(f"  Total: {len(contests)} contest(s) found.")
-        return contests
+        # Filter contests by skills using the keywords extracted from the RSS feed
+        filtered_contests = []
+        for c in contests:
+            text_to_search = (c["title"] + " " + c["description"] + " " + c["skills"]).lower()
+            if not SKILLS_FILTER:
+                filtered_contests.append(c)
+                continue
+                
+            matched = False
+            for skill in SKILLS_FILTER:
+                # Use regex with word boundaries for accurate keyword matching
+                if re.search(r'\b' + re.escape(skill) + r'\b', text_to_search):
+                    matched = True
+                    break
+                    
+            if matched:
+                filtered_contests.append(c)
+
+        log.info(f"  Total: {len(filtered_contests)} contest(s) matching skills found (out of {len(contests)} scraped).")
+        return filtered_contests
     except Exception as e:
         log.error(f"  Contest scrape error: {e}")
         return []
