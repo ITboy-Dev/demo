@@ -424,7 +424,14 @@ def build_digest_email_html(items_with_briefs: list) -> str:
     all_blocks_html = "\n".join(blocks)
     
     count = len(items_with_briefs)
-    title_text = f"&#128276; {count} NEW FREELANCER OPPORTUNITIES" if count > 1 else "&#128276; NEW FREELANCER OPPORTUNITY"
+    first_type = items_with_briefs[0]['item']['type']
+    
+    if first_type == "CONTEST":
+        title_text = f"&#127942; {count} NEW FREELANCER CONTESTS" if count > 1 else "&#127942; NEW FREELANCER CONTEST"
+        subject = f"[CONTESTS] {count} New Contests Matched!" if count > 1 else f"[CONTEST] {items_with_briefs[0]['item']['title']}"
+    else:
+        title_text = f"&#128640; {count} NEW FREELANCER PROJECTS" if count > 1 else "&#128640; NEW FREELANCER PROJECT"
+        subject = f"[PROJECTS] {count} New Projects Matched!" if count > 1 else f"[PROJECT] {items_with_briefs[0]['item']['title']}"
 
     return f"""\
     <html>
@@ -454,7 +461,7 @@ def build_digest_email_html(items_with_briefs: list) -> str:
             <tr>
               <td style="padding:18px 32px; background:#0f0f13; border-top:1px solid #2a2a4a; display:block;">
                 <p style="margin:0; color:#64748b; font-size:12px; text-align:center;">
-                  Freelancer Monitor v2.0 &#8226; Batched Delivery &#8226; Powered by Groq AI
+                  Freelancer Monitor v2.0 &#8226; {first_type} Batched Delivery &#8226; Powered by Groq AI
                 </p>
               </td>
             </tr>
@@ -473,7 +480,10 @@ def send_digest_email(items_with_briefs: list):
         return False
         
     count = len(items_with_briefs)
-    subject = f"[FREELANCER] {count} New Opportunities Matched!" if count > 1 else f"[{items_with_briefs[0]['item']['type']}] {items_with_briefs[0]['item']['title']}"
+    first_type = items_with_briefs[0]['item']['type']
+    subject = f"[CONTESTS] {count} New Contests Matched!" if first_type == "CONTEST" and count > 1 else (
+              f"[PROJECTS] {count} New Projects Matched!" if first_type == "PROJECT" and count > 1 else 
+              f"[{first_type}] {items_with_briefs[0]['item']['title']}")
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -573,15 +583,26 @@ def run_monitor():
             log.error(f"  Contest check error: {e}", exc_info=True)
 
         if new_items_this_cycle:
-            # Enforce the backlog slicing feature (max 12 per cycle)
-            batch = new_items_this_cycle[:12]
-            log.info(f"  Found {len(new_items_this_cycle)} new items. Processing batch of {len(batch)} items...")
+            # Separate into independent systems
+            prj_items = [i for i in new_items_this_cycle if i["type"] == "PROJECT"]
+            cnt_items = [i for i in new_items_this_cycle if i["type"] == "CONTEST"]
             
-            process_batch(batch, seen)
-            
-            log.info(f"  Batch processed. {len(new_items_this_cycle) - len(batch)} items remaining in backlog for next tick.")
-            new_projects += len([i for i in batch if i["type"] == "PROJECT"])
-            new_contests += len([i for i in batch if i["type"] == "CONTEST"])
+            # --- Dedicated Projects System ---
+            if prj_items:
+                batch_prj = prj_items[:12]
+                log.info(f"  Found {len(prj_items)} new PROJECTS. Processing batch of {len(batch_prj)} items...")
+                process_batch(batch_prj, seen)
+                log.info(f"  Project Batch processed. {len(prj_items) - len(batch_prj)} projects remaining in backlog.")
+                new_projects += len(batch_prj)
+                
+            # --- Dedicated Contests System ---
+            if cnt_items:
+                batch_cnt = cnt_items[:12]
+                log.info(f"  Found {len(cnt_items)} new CONTESTS. Processing batch of {len(batch_cnt)} items...")
+                process_batch(batch_cnt, seen)
+                log.info(f"  Contest Batch processed. {len(cnt_items) - len(batch_cnt)} contests remaining in backlog.")
+                new_contests += len(batch_cnt)
+                
         else:
             log.info("  No new items found. Backlog is clear.")
 
