@@ -35,7 +35,11 @@ logging.basicConfig(
 log = logging.getLogger("freelancer-monitor")
 
 # ─── Configuration ─────────────────────────────────────────
-GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
+raw_keys = os.getenv("GROQ_API_KEYS", os.getenv("GROQ_API_KEY", ""))
+API_KEYS = [k.strip() for k in re.split(r'[,\n\s]+', raw_keys) if k.strip()]
+CURRENT_KEY_INDEX = 0
+
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "") # Fallback compatibility
 RSS_URL            = os.getenv("FREELANCER_RSS_URL",
                        "https://www.freelancer.com/rss.xml"
                        "?query=Typescript%20Tailwind%20CSS%20Node.js%20VPS%20PHP"
@@ -243,10 +247,13 @@ def fetch_contests() -> list:
 
 # ─── Groq AI Analysis ─────────────────────────────────
 def analyze_with_groq(item: dict) -> str:
-    """Send listing details to Groq for strategic analysis."""
-    if not GROQ_API_KEY:
-        log.warning("  GROQ_API_KEY not set -- skipping AI analysis.")
-        return "<em>AI analysis unavailable (API key not configured).</em>"
+    """Send listing details to Groq for strategic analysis.
+    Rotates API keys if rate limits or errors occur."""
+    global CURRENT_KEY_INDEX
+    
+    if not API_KEYS:
+        log.warning("  GROQ_API_KEYS not set -- skipping AI analysis.")
+        return "<em>AI analysis unavailable (API keys not configured).</em>"
 
     listing_type = item["type"]
     prompt = (
@@ -264,10 +271,6 @@ def analyze_with_groq(item: dict) -> str:
     if item.get("skills"):
         prompt += f"\n**Skills Required:** {item['skills']}"
 
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [{"role": "user", "content": prompt}],
@@ -275,23 +278,40 @@ def analyze_with_groq(item: dict) -> str:
         "max_tokens": 500,
     }
 
-    try:
-        log.info("  Requesting Groq analysis...")
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        analysis = data["choices"][0]["message"]["content"]
-        log.info("  AI analysis received.")
-        return analysis
-    except requests.exceptions.Timeout:
-        log.error("  Groq API timed out.")
-        return "<em>AI analysis timed out.</em>"
-    except requests.exceptions.RequestException as e:
-        log.error(f"  Groq API error: {e}")
-        return f"<em>AI analysis failed: {e}</em>"
-    except (KeyError, IndexError) as e:
-        log.error(f"  Unexpected API response: {e}")
-        return "<em>AI analysis returned unexpected format.</em>"
+    # Attempt to call Groq, rotating through available API keys
+    for attempt in range(len(API_KEYS)):
+        current_key = API_KEYS[CURRENT_KEY_INDEX]
+        headers = {
+            "Authorization": f"Bearer {current_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            log.info(f"  Requesting Groq analysis (Attempt {attempt+1}/{len(API_KEYS)} using Key #{CURRENT_KEY_INDEX + 1})...")
+            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+            
+            if resp.status_code == 429 or resp.status_code == 402:
+                log.warning(f"  Key #{CURRENT_KEY_INDEX + 1} hit limit/error ({resp.status_code}). Rotating to next key...")
+                CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+                continue
+                
+            resp.raise_for_status()
+            data = resp.json()
+            analysis = data["choices"][0]["message"]["content"]
+            log.info("  AI analysis received successfully.")
+            return analysis
+            
+        except requests.exceptions.Timeout:
+            log.warning(f"  Groq API timed out on Key #{CURRENT_KEY_INDEX + 1}. Rotating...")
+            CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+        except requests.exceptions.RequestException as e:
+            log.warning(f"  Groq API request error on Key #{CURRENT_KEY_INDEX + 1}: {e}. Rotating...")
+            CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+        except (KeyError, IndexError) as e:
+            log.error(f"  Unexpected API response format: {e}")
+            break
+
+    return "<em>AI analysis unavailable (All API keys failed or hit limits).</em>"
 
 
 # ─── Email Notification ───────────────────────────────────
@@ -455,7 +475,7 @@ def run_monitor():
 
     # Validate config
     missing = []
-    if not GROQ_API_KEY:       missing.append("GROQ_API_KEY")
+    if not API_KEYS:           missing.append("GROQ_API_KEYS (or GROQ_API_KEY)")
     if not SENDER_EMAIL:       missing.append("SENDER_EMAIL")
     if not GMAIL_APP_PASSWORD: missing.append("GMAIL_APP_PASSWORD")
     if not RECEIVER_EMAIL:     missing.append("RECEIVER_EMAIL")
