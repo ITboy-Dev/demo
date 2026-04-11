@@ -53,7 +53,13 @@ rss_qs = urllib.parse.parse_qs(parsed_rss.query)
 raw_query = rss_qs.get("query", [""])[0]
 SKILLS_FILTER = [s.strip().lower() for s in raw_query.split() if s.strip()]
 
-FALLBACK_RSS_URL = "https://www.freelancer.com/rss.xml?query=Graphic%20Design%20Photoshop%20Illustrator%20Logo"
+# Multiple RSS feeds to get maximum coverage
+RSS_FEEDS = [
+    RSS_URL,  # Primary (user's tech skills)
+    "https://www.freelancer.com/rss.xml?query=Graphic%20Design%20Photoshop%20Illustrator%20Logo",
+    "https://www.freelancer.com/rss.xml?query=Website%20Design%20Landing%20Page%20UI%20UX",
+    "https://www.freelancer.com/rss.xml?query=WordPress%20Shopify%20Wix%20Squarespace",
+]
 FALLBACK_SKILLS = ["illustrator", "photoshop", "design", "graphic", "logo"]
 
 CONTEST_BROWSE_URL = "https://www.freelancer.com/contest/browse/"
@@ -63,7 +69,7 @@ RECEIVER_EMAIL     = os.getenv("RECEIVER_EMAIL", "")
 
 STATE_FILE         = "seen_ids.json"
 LOOP_DURATION_SEC  = 5 * 60        # Run for 5 minutes per GitHub Actions invocation
-CHECK_INTERVAL_SEC = 30            # Check every 30 seconds (aggressive)
+CHECK_INTERVAL_SEC = 15            # Check every 15 seconds (ultra-aggressive)
 GROQ_API_URL       = "https://api.groq.com/openai/v1/chat/completions"
 
 # Request headers to avoid being blocked
@@ -212,9 +218,9 @@ def fetch_contests() -> list:
                         "pub_date": "",
                     })
 
-        # Method 2: Also try the Freelancer API endpoint (public, no auth needed for listing)
+        # Method 2: Freelancer API — fetch MORE contests (50 limit, no skill filter)
         try:
-            api_url = "https://www.freelancer.com/api/contests/0.1/contests/?compact=true&limit=20&contest_statuses[]=active"
+            api_url = "https://www.freelancer.com/api/contests/0.1/contests/?compact=true&limit=50&contest_statuses[]=active"
             api_resp = requests.get(api_url, headers=HEADERS, timeout=10)
             if api_resp.status_code == 200:
                 api_data = api_resp.json()
@@ -230,9 +236,14 @@ def fetch_contests() -> list:
                             currency = c.get("currency", {}).get("code", "USD")
                             budget = f"{currency} {c['prize']}"
                         skills_list = [s.get("name", "") for s in c.get("jobs", [])]
+                        
+                        # Extract time_submitted for age tracking
+                        time_submitted = c.get("time_submitted", 0)
+                        pub_date = ""
+                        if time_submitted:
+                            pub_date = datetime.fromtimestamp(time_submitted, tz=timezone.utc).isoformat()
 
                         item_id = f"contest_{cid}"
-                        # Don't add duplicates from scraping
                         if not any(x["id"] == item_id for x in contests):
                             contests.append({
                                 "type": "CONTEST",
@@ -242,39 +253,15 @@ def fetch_contests() -> list:
                                 "description": desc[:500] if desc else "",
                                 "skills": ", ".join(skills_list),
                                 "budget": budget,
-                                "pub_date": "",
+                                "pub_date": pub_date,
                             })
                     log.info(f"  API returned {len(api_data['result']['contests'])} contest(s).")
         except Exception as api_err:
             log.debug(f"  API fallback failed (non-critical): {api_err}")
 
-        # Filter contests by skills using the keywords extracted from the RSS feed
-        filtered_contests = []
-        for c in contests:
-            text_to_search = (c["title"] + " " + c["description"] + " " + c["skills"]).lower()
-            if not SKILLS_FILTER:
-                filtered_contests.append(c)
-                continue
-                
-            matched = False
-            for skill in SKILLS_FILTER:
-                # Use regex with word boundaries for accurate keyword matching
-                if re.search(r'\b' + re.escape(skill) + r'\b', text_to_search):
-                    matched = True
-                    break
-                    
-            if not matched:
-                # Try explicit contest Graphic Design fallbacks
-                for skill in FALLBACK_SKILLS:
-                    if re.search(r'\b' + re.escape(skill) + r'\b', text_to_search):
-                        matched = True
-                        break
-                        
-            if matched:
-                filtered_contests.append(c)
-
-        log.info(f"  Total: {len(filtered_contests)} contest(s) matching skills found (out of {len(contests)} scraped).")
-        return filtered_contests
+        # NO SKILL FILTERING — send ALL contests to user
+        log.info(f"  Total: {len(contests)} contest(s) found (ALL sent, no filtering).")
+        return contests
     except Exception as e:
         log.error(f"  Contest scrape error: {e}")
         return []
@@ -291,15 +278,24 @@ def analyze_with_groq(item: dict) -> str:
         return "<em>AI analysis unavailable (API keys not configured).</em>"
 
     listing_type = item["type"]
+    action = 'win this contest' if listing_type == 'CONTEST' else 'land this project'
+    role = 'contest strategist' if listing_type == 'CONTEST' else 'freelance bid expert'
+    
     prompt = (
-        f"You are a professional developer and {'contest strategist' if listing_type == 'CONTEST' else 'freelance bid expert'}. "
-        f"Analyze this Freelancer.com {listing_type.lower()}. Give me a 3-point summary:\n"
-        "1) What is the exact deliverable?\n"
-        "2) What tech/tools are best for this?\n"
-        f"3) A 'killer strategy' to {'win this contest' if listing_type == 'CONTEST' else 'land this project'}.\n\n"
-        "Keep it short, punchy, and actionable.\n\n"
+        f"Tum ek senior professional developer aur {role} ho. "
+        f"Yeh Freelancer.com ka {listing_type.lower()} analyze karo aur ROMAN URDU mein jawab do.\n\n"
+        f"Mujhe 3 cheezein chahiye:\n"
+        f"1) **PROJECT KA BRIEF** — Yeh project exactly kya hai? Client ko kya chahiye? Poora detail Roman Urdu mein samjhao jaise kisi ko bata rahe ho.\n"
+        f"2) **BEST TOOLS & TECH** — Iske liye kaunse tools, languages aur technologies use karni chahiye?\n"
+        f"3) **PROFESSIONAL PROPOSAL** — Ek ready-to-send professional proposal likho jo main seedha client ko bhej sakoon. Yeh proposal English mein hona chahiye, aur ismein likho:\n"
+        f"   - 'Dear Client, I have carefully reviewed your project...'"
+        f"   - Batao ke tumhare paas relevant experience hai\n"
+        f"   - Batao ke tum yeh kaise complete karoge (approach)\n"
+        f"   - Timeline do (realistic)\n"
+        f"   - End mein likho 'I am ready to start immediately. Let us discuss further.'\n\n"
+        f"IMPORTANT: Point 1 and 2 MUST be in Roman Urdu. Point 3 (Proposal) MUST be in professional English.\n\n"
         f"**{listing_type} Title:** {item['title']}\n\n"
-        f"**Description:**\n{item['description'][:800]}"
+        f"**Description:**\n{item['description'][:1000]}"
     )
     if item.get("budget"):
         prompt += f"\n\n**Budget:** {item['budget']}"
@@ -307,46 +303,54 @@ def analyze_with_groq(item: dict) -> str:
         prompt += f"\n**Skills Required:** {item['skills']}"
 
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.5,
-        "max_tokens": 500,
+        "temperature": 0.6,
+        "max_tokens": 800,
     }
 
-    # Attempt to call Groq, rotating through available API keys
-    for attempt in range(len(API_KEYS)):
-        current_key = API_KEYS[CURRENT_KEY_INDEX]
-        headers = {
-            "Authorization": f"Bearer {current_key}",
-            "Content-Type": "application/json",
-        }
+    # Attempt to call Groq with smart rate-limit handling
+    # Try all keys twice — second pass after a cooldown wait
+    for pass_num in range(2):
+        if pass_num == 1:
+            log.info("  All keys rate-limited. Waiting 20s cooldown before retry...")
+            time.sleep(20)
+        
+        for attempt in range(len(API_KEYS)):
+            current_key = API_KEYS[CURRENT_KEY_INDEX]
+            headers = {
+                "Authorization": f"Bearer {current_key}",
+                "Content-Type": "application/json",
+            }
 
-        try:
-            log.info(f"  Requesting Groq analysis (Attempt {attempt+1}/{len(API_KEYS)} using Key #{CURRENT_KEY_INDEX + 1})...")
-            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
-            
-            if resp.status_code == 429 or resp.status_code == 402:
-                log.warning(f"  Key #{CURRENT_KEY_INDEX + 1} hit limit/error ({resp.status_code}). Rotating to next key...")
-                CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
-                continue
+            try:
+                log.info(f"  Groq Pass {pass_num+1} Attempt {attempt+1}/{len(API_KEYS)} (Key #{CURRENT_KEY_INDEX + 1})...")
+                resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
                 
-            resp.raise_for_status()
-            data = resp.json()
-            analysis = data["choices"][0]["message"]["content"]
-            log.info("  AI analysis received successfully.")
-            return analysis
-            
-        except requests.exceptions.Timeout:
-            log.warning(f"  Groq API timed out on Key #{CURRENT_KEY_INDEX + 1}. Rotating...")
-            CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
-        except requests.exceptions.RequestException as e:
-            log.warning(f"  Groq API request error on Key #{CURRENT_KEY_INDEX + 1}: {e}. Rotating...")
-            CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
-        except (KeyError, IndexError) as e:
-            log.error(f"  Unexpected API response format: {e}")
-            break
+                if resp.status_code == 429 or resp.status_code == 402:
+                    log.warning(f"  Key #{CURRENT_KEY_INDEX + 1} rate-limited ({resp.status_code}). Rotating...")
+                    CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+                    time.sleep(2)  # Small delay between key rotations
+                    continue
+                    
+                resp.raise_for_status()
+                data = resp.json()
+                analysis = data["choices"][0]["message"]["content"]
+                log.info("  AI analysis received successfully.")
+                time.sleep(1.5)  # Prevent hammering — pace the API calls
+                return analysis
+                
+            except requests.exceptions.Timeout:
+                log.warning(f"  Groq API timed out on Key #{CURRENT_KEY_INDEX + 1}. Rotating...")
+                CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+            except requests.exceptions.RequestException as e:
+                log.warning(f"  Groq API error on Key #{CURRENT_KEY_INDEX + 1}: {e}. Rotating...")
+                CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+            except (KeyError, IndexError) as e:
+                log.error(f"  Unexpected API response format: {e}")
+                return "<em>AI analysis error.</em>"
 
-    return "<em>AI analysis unavailable (All API keys failed or hit limits).</em>"
+    return "<em>AI analysis unavailable (All keys rate-limited — will retry next cycle).</em>"
 
 
 # ─── Email Notification ───────────────────────────────────
@@ -368,6 +372,38 @@ def build_digest_email_html(items_with_briefs: list) -> str:
         icon = "CONTEST" if is_contest else "PROJECT"
         cta_text = "ENTER CONTEST" if is_contest else "BID ON PROJECT"
         
+        # Calculate time ago
+        time_ago_html = ""
+        is_latest = False
+        pub_date = item.get("pub_date", "")
+        if pub_date:
+            try:
+                from dateutil import parser as dateparser
+                pub_dt = dateparser.parse(pub_date)
+                if pub_dt.tzinfo is None:
+                    pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+                diff = datetime.now(timezone.utc) - pub_dt
+                mins = int(diff.total_seconds() / 60)
+                if mins < 1:
+                    time_str = "abhi abhi (just now)"
+                    is_latest = True
+                elif mins < 60:
+                    time_str = f"{mins} minute{'s' if mins>1 else ''} pehle"
+                    is_latest = mins <= 10
+                elif mins < 1440:
+                    hrs = mins // 60
+                    time_str = f"{hrs} hour{'s' if hrs>1 else ''} pehle"
+                else:
+                    days = mins // 1440
+                    time_str = f"{days} day{'s' if days>1 else ''} pehle"
+                time_ago_html = f'<span style="color:#64748b; font-size:12px;">&#128337; Posted {time_str}</span>'
+            except:
+                pass
+        
+        latest_badge = ''
+        if is_latest:
+            latest_badge = '<span style="background:#16a34a; color:#fff; padding:4px 10px; border-radius:12px; font-size:11px; font-weight:700; letter-spacing:0.5px; margin-left:8px;">&#128293; LATEST</span>'
+
         block = f"""
             <!-- Project/Contest Block -->
             <tr>
@@ -377,6 +413,7 @@ def build_digest_email_html(items_with_briefs: list) -> str:
                     <h2 style="margin:0; color:#e2e8f0; font-size:18px; line-height:1.4;">
                       {item['title']}
                     </h2>
+                    <div style="margin-top:6px;">{time_ago_html} {latest_badge}</div>
                   </td>
                   <td align="right" valign="top">
                     <span style="background:{badge_bg}; color:{badge_text}; padding:6px 14px; border-radius:20px; font-size:12px; font-weight:700; letter-spacing:1px; white-space:nowrap;">
@@ -409,7 +446,7 @@ def build_digest_email_html(items_with_briefs: list) -> str:
               <td style="padding:0 32px 20px; background:#1a1a2e; display:block;">
                 <div style="background:#12121c; border:1px solid #2a2a4a; border-radius:8px; padding:20px;">
                   <h3 style="margin:0 0 12px; color:{accent}; font-size:14px; text-transform:uppercase; letter-spacing:1px;">
-                    &#129302; AI Strategic Brief
+                    &#129302; AI Strategic Brief (Roman Urdu + Proposal)
                   </h3>
                   <div style="color:#cbd5e1; font-size:14px; line-height:1.7;">
                     {ai_html}
@@ -481,38 +518,88 @@ def build_digest_email_html(items_with_briefs: list) -> str:
     </html>
     """
 
+GITHUB_API_TOKEN = os.getenv("GITHUB_API_TOKEN", "")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "ITboy-Dev/demo")
+
 def send_digest_email(items_with_briefs: list):
-    """Send alert email via Gmail SMTP containing multiple aggregated items."""
+    """Send alert email — uses GitHub Actions Relay to bypass free tier strict limits."""
     if not all([SENDER_EMAIL, GMAIL_APP_PASSWORD, RECEIVER_EMAIL]):
         log.error("  Email credentials not fully configured. Skipping.")
         return False
         
     count = len(items_with_briefs)
-    first_type = items_with_briefs[0]['item']['type']
-    subject = f"[CONTESTS] {count} New Contests Matched!" if first_type == "CONTEST" and count > 1 else (
-              f"[PROJECTS] {count} New Projects Matched!" if first_type == "PROJECT" and count > 1 else 
-              f"[{first_type}] {items_with_briefs[0]['item']['title']}")
+    log.info(f"  Preparing to relay {count} emails to GitHub Actions...")
+    
+    if GITHUB_API_TOKEN and GITHUB_REPO:
+        try:
+            emails_to_send = []
+            for item_data in items_with_briefs:
+                single_subject = f"[{item_data['item']['type']}] {item_data['item']['title'][:80]}"
+                single_html = build_digest_email_html([item_data])
+                emails_to_send.append({
+                    "subject": single_subject,
+                    "html": single_html
+                })
+                
+            # Chunking into batches of 4 to avoid GitHub's 64KB payload limit
+            chunk_size = 4
+            success_count = 0
+            
+            for i in range(0, len(emails_to_send), chunk_size):
+                chunk = emails_to_send[i:i+chunk_size]
+                payload = {
+                    "event_type": "hf_email_relay",
+                    "client_payload": {
+                        "emails": chunk
+                    }
+                }
+                
+                resp = requests.post(
+                    f"https://api.github.com/repos/{GITHUB_REPO}/dispatches",
+                    headers={
+                        "Authorization": f"Bearer {GITHUB_API_TOKEN}",
+                        "Accept": "application/vnd.github.v3+json"
+                    },
+                    json=payload,
+                    timeout=20
+                )
+                
+                if resp.status_code == 204:
+                    success_count += len(chunk)
+                else:
+                    log.error(f"  GitHub Relay Error: {resp.status_code} - {resp.text}")
+                    
+                time.sleep(1) # Prevent secondary API rate limiting
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = f"Freelancer Monitor <{SENDER_EMAIL}>"
-    msg["To"]      = RECEIVER_EMAIL
+            log.info(f"  GitHub Action triggered! ({success_count}/{count} relayed successfully)")
+            return success_count > 0
 
-    html_body = build_digest_email_html(items_with_briefs)
-    msg.attach(MIMEText(html_body, "html"))
+        except Exception as e:
+            log.error(f"  GitHub Relay failed: {e}")
 
+    # Fallback to direct SMTP (only works on local/actions, blocked on HF spaces)
     try:
-        log.info(f"  Sending batched email to {RECEIVER_EMAIL} ({count} items)...")
+        log.info(f"  Attempting Direct SMTP fallback ({count} items)...")
+        first_type = items_with_briefs[0]['item']['type']
+        subject = f"[CONTESTS] {count} New Contests Matched!" if first_type == "CONTEST" and count > 1 else (
+                  f"[PROJECTS] {count} New Projects Matched!" if first_type == "PROJECT" and count > 1 else 
+                  f"[{first_type}] {items_with_briefs[0]['item']['title']}")
+
+        html_body = build_digest_email_html(items_with_briefs)
+        
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Freelancer Monitor <{SENDER_EMAIL}>"
+        msg["To"] = RECEIVER_EMAIL
+        msg.attach(MIMEText(html_body, "html"))
+        
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
             server.login(SENDER_EMAIL, GMAIL_APP_PASSWORD)
             server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        log.info("  Batched email sent successfully!")
+        log.info("  Direct SMTP sent successfully!")
         return True
-    except smtplib.SMTPAuthenticationError:
-        log.error("  SMTP auth failed. Check SENDER_EMAIL & GMAIL_APP_PASSWORD.")
-        return False
     except Exception as e:
-        log.error(f"  Email sending failed: {e}")
+        log.error(f"  Direct SMTP failed: {e}")
         return False
 
 
@@ -572,23 +659,17 @@ def run_monitor():
 
         new_items_this_cycle = []
 
-        # ── Check Projects (RSS) ──
-        log.info("[PROJECTS] Fetching Primary RSS feed...")
+        # ── Check Projects (ALL RSS feeds for max coverage) ──
+        log.info("[PROJECTS] Fetching ALL RSS feeds...")
         try:
-            projects = fetch_projects(RSS_URL)
-            for item in projects:
-                if item["id"] not in seen["projects"]:
-                    new_items_this_cycle.append(item)
-                    
-            # Fallback if we found 0 new projects, or less than a healthy batch (e.g. < 4)
-            # The user requested explicitly: "send about 4 of those..."
-            new_primary_projects = len([i for i in new_items_this_cycle if i["type"] == "PROJECT"])
-            if new_primary_projects < 4:
-                log.info(f"  Only {new_primary_projects} primary projects found. Searching Graphic Design fallback...")
-                fallback_projects = fetch_projects(FALLBACK_RSS_URL)
-                for item in fallback_projects:
-                    if item["id"] not in seen["projects"]:
+            seen_ids_set = set()  # Avoid duplicates across feeds
+            for feed_url in RSS_FEEDS:
+                projects = fetch_projects(feed_url)
+                for item in projects:
+                    if item["id"] not in seen["projects"] and item["id"] not in seen_ids_set:
                         new_items_this_cycle.append(item)
+                        seen_ids_set.add(item["id"])
+            log.info(f"  Found {len([i for i in new_items_this_cycle if i['type']=='PROJECT'])} new projects from {len(RSS_FEEDS)} feeds.")
         except Exception as e:
             log.error(f"  Project check error: {e}", exc_info=True)
 

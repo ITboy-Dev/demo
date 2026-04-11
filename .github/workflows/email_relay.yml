@@ -1,0 +1,57 @@
+name: "HF Email Relay"
+
+on:
+  repository_dispatch:
+    types: [hf_email_relay]
+
+jobs:
+  send_email:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Batched Emails via SMTP
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          # The payload contains the 'emails' array
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        run: |
+          cat << 'EOF' > send.py
+          import os, json, smtplib
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+
+          sender = os.environ.get("SENDER_EMAIL")
+          pwd = os.environ.get("GMAIL_APP_PASSWORD")
+          receiver = os.environ.get("RECEIVER_EMAIL")
+          payload_str = os.environ.get("PAYLOAD", "{}")
+
+          try:
+              data = json.loads(payload_str)
+              emails = data.get("emails", [])
+              if not emails:
+                  print("No emails found in payload.")
+                  exit(0)
+
+              print(f"Opening SMTP connection for {len(emails)} emails...")
+              server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+              server.login(sender, pwd)
+
+              for i, email_data in enumerate(emails):
+                  msg = MIMEMultipart()
+                  msg['From'] = sender
+                  msg['To'] = receiver
+                  msg['Subject'] = email_data.get('subject', 'Freelancer Alert')
+                  html = email_data.get('html', '')
+                  msg.attach(MIMEText(html, 'html'))
+                  
+                  server.send_message(msg)
+                  print(f"Sent [{i+1}/{len(emails)}]: {msg['Subject']}")
+
+              server.quit()
+              print("All emails sent successfully!")
+          except Exception as e:
+              print(f"Fatal error during email send: {e}")
+              exit(1)
+          EOF
+          python3 send.py
